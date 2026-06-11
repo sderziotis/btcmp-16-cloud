@@ -54,19 +54,11 @@
         group: root
         mode: '0644'
 
-    - name: Create evidence directory
-      ansible.builtin.file:
-        path: /home/user/evidence
-        state: directory
-        mode: '0755'
-
     - name: Extract evidence package
       ansible.builtin.unarchive:
         src: /tmp/cloud-logs.zip
-        dest: /home/user/evidence
+        dest: /home/user/
         remote_src: true
-        extra_opts:
-          - --strip-components=1
 
     - name: Set evidence ownership
       ansible.builtin.file:
