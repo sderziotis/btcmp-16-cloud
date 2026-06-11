@@ -1,0 +1,35 @@
+# Main topology
+name: btcmp-16-cloud-main
+hosts:
+  - name: cloudvm
+    flavor: c2_r4_d40
+    base_box:
+      image: xubuntu-noble-x86_64
+      mgmt_user: ubuntu
+      mgmt_protocol: ssh
+    hidden: false
+routers:
+  - name: router
+    flavor: standard.small
+    base_box:
+      image: ubuntu-noble-x86_64
+      mgmt_user: ubuntu
+      mgmt_protocol: ssh
+    hidden: false
+networks:
+  - name: network-2
+    cidr: 192.168.0.0/24
+    accessible_by_user: true
+    hidden: false
+wan:
+  name: network-1
+  cidr: 10.10.10.0/24
+net_mappings:
+  - host: cloudvm
+    network: network-2
+    ip: 192.168.0.10
+router_mappings:
+  - router: router
+    network: network-2
+    ip: 192.168.0.1
+groups: []

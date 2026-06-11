@@ -1,0 +1,106 @@
+# ─────────────────────────────────────────────
+#  MACHINE 1 - cloudvm
+# ─────────────────────────────────────────────
+- name: init machine cloudvm
+  hosts:
+    - cloudvm
+  become: true
+
+  tasks:
+
+  # ─── Disable unattended-upgrades ────────────────────────────
+
+    - name: Disable unattended-upgrades during provisioning
+      ansible.builtin.systemd:
+        name: unattended-upgrades
+        state: stopped
+      failed_when: false
+
+    - name: Kill leftover apt/dpkg processes
+      ansible.builtin.shell: |
+        pkill -9 apt || true
+        pkill -9 dpkg || true
+      changed_when: false
+      failed_when: false
+
+    - name: Wait for apt lock to be released
+      ansible.builtin.shell: >
+        while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock \
+        /var/cache/apt/archives/lock /var/lib/dpkg/lock >/dev/null 2>&1; do
+          sleep 3
+        done
+      changed_when: false
+      failed_when: false
+
+  # ─── Base APT packages ──────────────────────────────────────
+
+    - name: Install base packages
+      ansible.builtin.apt:
+        name:
+          - python3
+          - unzip
+          - jq
+          - libreoffice-writer
+        state: present
+        update_cache: true
+
+  # ─── Evidence ───────────────────────────────────────────────
+
+    - name: Copy cloud evidence package to cloudvm
+      ansible.builtin.copy:
+        src: ../files/cloud-logs.zip
+        dest: /tmp/cloud-logs.zip
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create evidence directory
+      ansible.builtin.file:
+        path: /home/user/evidence
+        state: directory
+        mode: '0755'
+
+    - name: Extract evidence package
+      ansible.builtin.unarchive:
+        src: /tmp/cloud-logs.zip
+        dest: /home/user/evidence
+        remote_src: true
+        extra_opts:
+          - --strip-components=1
+
+    - name: Set evidence ownership
+      ansible.builtin.file:
+        path: /home/user/evidence
+        owner: user
+        group: user
+        recurse: true
+
+    - name: Remove temp archive
+      ansible.builtin.file:
+        path: /tmp/cloud-logs.zip
+        state: absent
+
+  # ─── Forensic Report Template ────────────────────────────────
+
+    - name: Create Desktop directory for user
+      ansible.builtin.file:
+        path: /home/user/Desktop
+        state: directory
+        owner: user
+        group: user
+        mode: '0755'
+
+    - name: Copy forensic report template to Desktop
+      ansible.builtin.copy:
+        src: ../files/Forensic_Report_Template.docx
+        dest: /home/user/Desktop/Forensic_Report_Template.docx
+        owner: user
+        group: user
+        mode: '0644'
+
+  # ─── Role ───────────────────────────────────────────────────
+  roles:
+    - role: user-access
+      user_access_username: user
+      user_access_password: 'Password123'
+      user_access_sudo: true

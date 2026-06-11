@@ -1,0 +1,66 @@
+INSTRUCTOR ANSWER KEY — Cloud Forensics mini-lab   (DO NOT distribute to trainees)
+==================================================================================
+
+Dataset is deterministic (generate_dataset.py, seed 1337). Re-running reproduces
+identical files and identical flags.
+
+FLAGS
+-----
+  1  Anomalous source IP        203.0.113.77
+  2  Compromised IAM user       svc-backup-dev
+  3  Recon timestamp (ListBuckets, UTC)   2026-05-14T02:17:43Z
+  4  Targeted bucket            acme-hr-records-prod
+  5  Objects exfiltrated        47
+  6  Persistence access key id  AKIA5EXAMPLE7XQ2R9KD
+
+INCIDENT WINDOW
+  First malicious event  2026-05-14T02:17:43Z  (ListBuckets)
+  Last malicious event   2026-05-14T02:31:12Z  (CreateAccessKey)
+  Bulk download window   ~02:19:04 - 02:24  (47 GETs on acme-hr-records-prod)
+
+SOLVE PATH (reference commands)
+-------------------------------
+FLAG 1 — outlier IP is found by SET DIFFERENCE vs the known egress range,
+         NOT by top-talker frequency (attacker is deliberately low-volume):
+    awk '{print $5}' s3_access.log | sort -u | grep -v '^198\.51\.100\.'
+    -> 203.0.113.77
+
+FLAG 2 — who is that IP acting as (S3 requester = field 6 / ARN):
+    grep '203.0.113.77' s3_access.log | awk '{print $6}' | sort -u
+    -> arn:aws:iam::123456789012:user/svc-backup-dev
+
+FLAG 4 + 5 — bucket and object count for the attacker's GETs:
+    grep '203.0.113.77' s3_access.log | awk '{print $2}' | sort | uniq -c
+    -> 47 acme-hr-records-prod
+
+FLAG 3 — recon time (CloudTrail):
+    jq -r '.Records[]
+           | select(.sourceIPAddress=="203.0.113.77" and .eventName=="ListBuckets")
+           | .eventTime' cloudtrail.json
+    -> 2026-05-14T02:17:43Z
+
+FLAG 6 — persistence key (CloudTrail):
+    jq -r '.Records[]
+           | select(.eventName=="CreateAccessKey")
+           | .responseElements.accessKey.accessKeyId' cloudtrail.json
+    -> AKIA5EXAMPLE7XQ2R9KD
+
+Full attacker control-plane chain:
+    jq -r '.Records[] | select(.sourceIPAddress=="203.0.113.77")
+           | "\(.eventTime)  \(.eventName)"' cloudtrail.json
+
+TEACHING NUANCES / RED HERRINGS
+-------------------------------
+  * svc-backup-dev has BOTH legit activity (PUTs to acme-backups from
+    198.51.100.x) and the malicious GETs (HR bucket from 203.0.113.77).
+    The anomaly is the COMBINATION (foreign IP + a bucket it never touches),
+    not the identity alone — this is the IAM-correlation lesson.
+  * The attacker is low-volume (47 hits) and sits well below the legit
+    top-talkers (~370 hits each). Frequency ranking will NOT surface them;
+    baseline comparison will. Worth calling out explicitly.
+  * One benign FAILED ConsoleLogin (user msmith, 2026-05-13 08:41, from a
+    corporate IP) is a deliberate red herring — wrong user, wrong IP, daytime.
+
+MITRE
+  T1530  Data from Cloud Storage Object   (bulk GET of HR objects)
+  T1567  Exfiltration Over Web Service    (egress to attacker-controlled host)
