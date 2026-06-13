@@ -4,62 +4,126 @@ INSTRUCTOR ANSWER KEY — Cloud Forensics mini-lab   (DO NOT distribute to train
 Dataset is deterministic (generate_dataset.py, seed 1337). Re-running reproduces
 identical files and identical flags.
 
-FLAGS
------
-  1  Anomalous source IP        203.0.113.77
-  2  Compromised IAM user       svc-backup-dev
-  3  Recon timestamp (ListBuckets, UTC)   2026-05-14T02:17:43Z
-  4  Targeted bucket            acme-hr-records-prod
-  5  Objects exfiltrated        47
-  6  Persistence access key id  AKIA5EXAMPLE7XQ2R9KD
+FLAGS (4)
+---------
+  1  Anomalous source IP                  203.0.113.77
+  2  Compromised IAM user                 svc-backup-dev
+  3  Targeted bucket + object count       acme-hr-records-prod : 47
+  4  Persistence access key id            AKIA5EXAMPLE7XQ2R9KD
 
-INCIDENT WINDOW
-  First malicious event  2026-05-14T02:17:43Z  (ListBuckets)
-  Last malicious event   2026-05-14T02:31:12Z  (CreateAccessKey)
-  Bulk download window   ~02:19:04 - 02:24  (47 GETs on acme-hr-records-prod)
+SUPPORTING VALUES (used in report, not separate flags)
+-------------------------------------------------------
+  Original compromised access key        AKIAIOSFODNN7EXAMPLE
+  Incident window (UTC)                  2026-05-14T02:17:43Z - 2026-05-14T02:31:12Z
+  Normal baseline for svc-backup-dev     REST.PUT.OBJECT on acme-backups
+  Data sensitivity                       High - PII / HR / payroll records
 
 SOLVE PATH (reference commands)
 -------------------------------
-FLAG 1 — outlier IP is found by SET DIFFERENCE vs the known egress range,
+FLAG 1 - outlier IP is found by SET DIFFERENCE vs the known egress range,
          NOT by top-talker frequency (attacker is deliberately low-volume):
     awk '{print $5}' s3_access.log | sort -u | grep -v '^198\.51\.100\.'
     -> 203.0.113.77
 
-FLAG 2 — who is that IP acting as (S3 requester = field 6 / ARN):
+FLAG 2 - who is that IP acting as (S3 requester ARN = field $6):
     grep '203.0.113.77' s3_access.log | awk '{print $6}' | sort -u
     -> arn:aws:iam::123456789012:user/svc-backup-dev
+    -> username: svc-backup-dev
 
-FLAG 4 + 5 — bucket and object count for the attacker's GETs:
+    Normal baseline (operation = $8, bucket = $2):
+    grep 'svc-backup-dev' s3_access.log | grep -v '203.0.113.77' | awk '{print $8, $2}' | sort -u
+    -> REST.PUT.OBJECT acme-backups
+
+FLAG 3 - bucket + count, one command (bucket = field $2):
     grep '203.0.113.77' s3_access.log | awk '{print $2}' | sort | uniq -c
     -> 47 acme-hr-records-prod
 
-FLAG 3 — recon time (CloudTrail):
-    jq -r '.Records[]
-           | select(.sourceIPAddress=="203.0.113.77" and .eventName=="ListBuckets")
-           | .eventTime' cloudtrail.json
-    -> 2026-05-14T02:17:43Z
+    Operation check (field $8):
+    grep '203.0.113.77' s3_access.log | awk '{print $8}' | sort | uniq -c
+    -> 47 REST.GET.OBJECT
 
-FLAG 6 — persistence key (CloudTrail):
-    jq -r '.Records[]
-           | select(.eventName=="CreateAccessKey")
-           | .responseElements.accessKey.accessKeyId' cloudtrail.json
-    -> AKIA5EXAMPLE7XQ2R9KD
+    Object key sample (field $9):
+    grep '203.0.113.77' s3_access.log | awk '{print $9}' | sort -u
+    -> payroll, employee SSN, passport scans, benefits, contracts, performance reviews
 
-Full attacker control-plane chain:
-    jq -r '.Records[] | select(.sourceIPAddress=="203.0.113.77")
-           | "\(.eventTime)  \(.eventName)"' cloudtrail.json
+FLAG 4 - persistence key (single-line jq with @tsv, no nested quoting):
+    jq -r '.Records[] | select(.eventName=="CreateAccessKey") |
+      [.eventTime, .responseElements.accessKey.accessKeyId] | @tsv' cloudtrail.json
+    -> 2026-05-14T02:31:12Z  AKIA5EXAMPLE7XQ2R9KD
+
+    Full attacker chain + original key (for Section 1 window, Section 3.2, Section 4):
+    jq -r '.Records[] | select(.sourceIPAddress=="203.0.113.77") |
+      [.eventTime, .eventName, .userIdentity.accessKeyId] | @tsv' cloudtrail.json
+    -> 2026-05-14T02:17:43Z  ListBuckets        AKIAIOSFODNN7EXAMPLE
+    -> 2026-05-14T02:18:05Z  GetBucketAcl       AKIAIOSFODNN7EXAMPLE
+    -> 2026-05-14T02:18:31Z  GetBucketPolicy    AKIAIOSFODNN7EXAMPLE
+    -> 2026-05-14T02:31:12Z  CreateAccessKey    AKIAIOSFODNN7EXAMPLE
+
+REPORT TEMPLATE - EXPECTED ENTRIES
+-----------------------------------
+  Section 1
+    Incident Date/Window    2026-05-14T02:17:43Z - 2026-05-14T02:31:12Z
+    (Detection Source, AWS Account ID, Region, MITRE - prefilled)
+
+  Section 3.1 - Anomalous Source IP
+    Attacker IP Address     203.0.113.77
+
+  Section 3.2 - Compromised Identity
+    IAM Username             svc-backup-dev
+    Access Key Used          AKIAIOSFODNN7EXAMPLE
+    Normal Activity          REST.PUT.OBJECT on acme-backups only
+
+  Section 3.3 - Targeted Resource & Exfiltration Volume
+    S3 Bucket Name           acme-hr-records-prod
+    Objects Downloaded       47
+    Data Sensitivity         High (checkbox)
+
+  Section 3.4 - Persistence Mechanism
+    New Access Key ID        AKIA5EXAMPLE7XQ2R9KD
+    Timestamp (UTC)          2026-05-14T02:31:12Z
+
+  Section 4 - Attack Timeline (chronological)
+    2026-05-14T02:17:43Z  ListBuckets
+    2026-05-14T02:18:05Z  GetBucketAcl
+    2026-05-14T02:18:31Z  GetBucketPolicy
+    2026-05-14T02:31:12Z  CreateAccessKey
+
+  Section 6 - Recommended Response Actions (checkboxes)
+    Correct (5):
+      [x] Revoke the original compromised access key
+      [x] Revoke the persistence access key created by the attacker
+      [x] Block the attacker's source IP at the network/WAF level
+      [x] Review and restrict the targeted bucket policy (least privilege)
+      [x] Notify affected individuals per breach notification policy
+    Distractors (do not select):
+      [ ] Rotate all IAM credentials account-wide   (overkill, not targeted)
+      [ ] Delete the targeted S3 bucket             (destroys evidence)
+      [ ] Enable MFA on the compromised account     (secondary, not primary response)
+      [ ] Disable the compromised IAM user entirely (debatable - key revocation suffices)
+      [ ] No action required                        (clearly wrong)
+
+FINAL QUIZ (5 min, post-lab)
+------------------------------
+Trainees answer using values already recorded in their report. Example questions:
+  - What is the anomalous IP address?            -> 203.0.113.77
+  - What IAM user was compromised?               -> svc-backup-dev
+  - Which bucket was targeted and how many
+    objects were downloaded?                     -> acme-hr-records-prod, 47
+  - What access key did the attacker create
+    for persistence?                             -> AKIA5EXAMPLE7XQ2R9KD
 
 TEACHING NUANCES / RED HERRINGS
 -------------------------------
   * svc-backup-dev has BOTH legit activity (PUTs to acme-backups from
     198.51.100.x) and the malicious GETs (HR bucket from 203.0.113.77).
     The anomaly is the COMBINATION (foreign IP + a bucket it never touches),
-    not the identity alone — this is the IAM-correlation lesson.
+    not the identity alone.
   * The attacker is low-volume (47 hits) and sits well below the legit
     top-talkers (~370 hits each). Frequency ranking will NOT surface them;
-    baseline comparison will. Worth calling out explicitly.
+    baseline comparison (grep -v against 198.51.100.0/24) will.
   * One benign FAILED ConsoleLogin (user msmith, 2026-05-13 08:41, from a
-    corporate IP) is a deliberate red herring — wrong user, wrong IP, daytime.
+    corporate IP) exists in cloudtrail.json as a red herring but is not
+    referenced by any task in the trimmed 4-flag version.
 
 MITRE
   T1530  Data from Cloud Storage Object   (bulk GET of HR objects)
