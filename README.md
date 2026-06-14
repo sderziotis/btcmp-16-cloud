@@ -1,6 +1,6 @@
 # BTCMP-16 — Cloud Forensics Lab
 
-applied to: BTCMP-16-DF4.3
+applied to: BTCMP-16-Df12.3
 
 **Module:** Cloud Forensics  
 **Difficulty:** Intermediate  
